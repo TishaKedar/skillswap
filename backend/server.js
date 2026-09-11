@@ -62,6 +62,10 @@ const corsOptions = {
 };
 
 // ─── Socket.io ──────────────────────────────────────────────────────────────
+// NOTE: Socket.io requires a persistent server process and will NOT work
+// on Vercel's serverless functions. This is wired up for local dev / for
+// when you deploy this backend to a persistent host (Render, Railway, Fly.io,
+// a VPS, etc). On Vercel, only the plain HTTP/Express routes below will work.
 
 const io = new Server(server, {
   cors: {
@@ -240,7 +244,8 @@ const PORT = process.env.PORT || 5000;
 
 connectDB().then(() => {
   // Start the server locally.
-  // Vercel handles the production server itself.
+  // Vercel handles the production server itself, and does NOT support
+  // long-lived sockets, so server.listen() only matters outside of Vercel.
   if (process.env.NODE_ENV !== "production") {
     server.listen(PORT, () => {
       console.log(
@@ -250,5 +255,10 @@ connectDB().then(() => {
   }
 });
 
-// Export the server for Vercel
-module.exports = server;
+// IMPORTANT: Export the Express `app` (a request-handler function),
+// NOT the raw http.Server returned by http.createServer(app).
+// @vercel/node needs a function it can invoke as (req, res) => {...}.
+// Exporting the http.Server instance breaks how Vercel wraps the handler,
+// which is what was causing requests to fail before your CORS middleware
+// ever got a chance to run (surfacing as a CORS error in the browser).
+module.exports = app;
