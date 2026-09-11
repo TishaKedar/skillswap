@@ -1,9 +1,11 @@
 require("dotenv").config();
+
 const express = require("express");
 const http = require("http");
 const cors = require("cors");
 const { Server } = require("socket.io");
 const jwt = require("jsonwebtoken");
+
 const connectDB = require("./config/db");
 const User = require("./models/User");
 const Message = require("./models/Message");
@@ -20,18 +22,27 @@ const notificationRoutes = require("./routes/notificationRoutes");
 const app = express();
 const server = http.createServer(app);
 
-const CORS_ORIGIN = process.env.CORS_ORIGIN || "http://localhost:5173";
+const CORS_ORIGIN =
+  process.env.CORS_ORIGIN || "http://localhost:5173";
 
+// ─── Socket.io ──────────────────────────────────────────────────────────────
 const io = new Server(server, {
-  cors: { origin: CORS_ORIGIN, methods: ["GET", "POST"] },
+  cors: {
+    origin: CORS_ORIGIN,
+    methods: ["GET", "POST"],
+  },
 });
 
 app.set("io", io);
 
+// ─── Middleware ─────────────────────────────────────────────────────────────
 app.use(cors({ origin: CORS_ORIGIN }));
 app.use(express.json());
 
-app.get("/", (req, res) => res.json({ message: "SkillSwap API is running" }));
+// ─── Routes ─────────────────────────────────────────────────────────────────
+app.get("/", (req, res) => {
+  res.json({ message: "SkillSwap API is running" });
+});
 
 app.use("/api/auth", authRoutes);
 app.use("/api/users", userRoutes);
@@ -40,20 +51,33 @@ app.use("/api/chat", chatRoutes);
 app.use("/api/reviews", reviewRoutes);
 app.use("/api/notifications", notificationRoutes);
 
-app.use((req, res) => res.status(404).json({ message: "Route not found" }));
+// ─── Error Handling ─────────────────────────────────────────────────────────
+app.use((req, res) => {
+  res.status(404).json({ message: "Route not found" });
+});
+
 app.use((err, req, res, next) => {
   console.error(err.stack);
   res.status(500).json({ message: "Something went wrong on the server" });
 });
 
-// ─── Socket.io ──────────────────────────────────────────────────────────────
+// ─── Socket.io Authentication ──────────────────────────────────────────────
 io.use(async (socket, next) => {
   const token = socket.handshake.auth?.token;
-  if (!token) return next(new Error("Unauthorized"));
+
+  if (!token) {
+    return next(new Error("Unauthorized"));
+  }
+
   try {
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
     const user = await User.findById(decoded.id);
-    if (!user) return next(new Error("User not found"));
+
+    if (!user) {
+      return next(new Error("User not found"));
+    }
+
     socket.user = user;
     next();
   } catch {
@@ -61,10 +85,12 @@ io.use(async (socket, next) => {
   }
 });
 
+// ─── Socket.io Connection ──────────────────────────────────────────────────
 io.on("connection", (socket) => {
   const userId = String(socket.user._id);
 
-  // Each user joins their own private room for targeted notifications
+  // Each user joins their own private room
+  // for targeted notifications
   socket.join(userId);
 
   // Join a swap chat room
@@ -72,6 +98,7 @@ io.on("connection", (socket) => {
     socket.join(`swap_${swapId}`);
   });
 
+  // Leave a swap chat room
   socket.on("leave_swap", (swapId) => {
     socket.leave(`swap_${swapId}`);
   });
@@ -79,13 +106,25 @@ io.on("connection", (socket) => {
   // Send a chat message in real time
   socket.on("send_message", async ({ swapId, text }) => {
     try {
-      if (!text?.trim()) return;
+      if (!text?.trim()) {
+        return;
+      }
 
       const swap = await SwapRequest.findById(swapId);
-      if (!swap) return;
+
+      if (!swap) {
+        return;
+      }
 
       const uid = String(socket.user._id);
-      if (String(swap.fromUser) !== uid && String(swap.toUser) !== uid) return;
+
+      // Make sure the sender belongs to this swap
+      if (
+        String(swap.fromUser) !== uid &&
+        String(swap.toUser) !== uid
+      ) {
+        return;
+      }
 
       const msg = await Message.create({
         swapId,
@@ -94,13 +133,24 @@ io.on("connection", (socket) => {
         readBy: [socket.user._id],
       });
 
-      const populated = await msg.populate("sender", "name avatar");
+      const populated = await msg.populate(
+        "sender",
+        "name avatar"
+      );
 
-      // Broadcast to the swap room
-      io.to(`swap_${swapId}`).emit("new_message", populated);
+      // Broadcast message to the swap room
+      io.to(`swap_${swapId}`).emit(
+        "new_message",
+        populated
+      );
 
-      // Notify the other party
-      const otherId = String(swap.fromUser) === uid ? String(swap.toUser) : String(swap.fromUser);
+      // Identify the other user
+      const otherId =
+        String(swap.fromUser) === uid
+          ? String(swap.toUser)
+          : String(swap.fromUser);
+
+      // Create notification
       await Notification.create({
         user: otherId,
         type: "new_message",
@@ -108,6 +158,8 @@ io.on("connection", (socket) => {
         body: text.trim().slice(0, 80),
         relatedId: swapId,
       });
+
+      // Send real-time notification
       io.to(otherId).emit("notification", {
         type: "new_message",
         title: `Message from ${socket.user.name}`,
@@ -115,14 +167,30 @@ io.on("connection", (socket) => {
         relatedId: swapId,
       });
     } catch (err) {
-      console.error("send_message error:", err.message);
+      console.error(
+        "send_message error:",
+        err.message
+      );
     }
   });
 
   socket.on("disconnect", () => {});
 });
 
+// ─── Server Startup ─────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 5000;
+
 connectDB().then(() => {
-  server.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
+  // Start the server locally.
+  // Vercel handles the production server itself.
+  if (process.env.NODE_ENV !== "production") {
+    server.listen(PORT, () => {
+      console.log(
+        `Server running on http://localhost:${PORT}`
+      );
+    });
+  }
 });
+
+// Export the server for Vercel
+module.exports = server;
