@@ -22,26 +22,71 @@ const notificationRoutes = require("./routes/notificationRoutes");
 const app = express();
 const server = http.createServer(app);
 
-const CORS_ORIGIN =
-  process.env.CORS_ORIGIN || "http://localhost:5173";
+// ─── CORS Configuration ────────────────────────────────────────────────────
+
+const allowedOrigins = [
+  "http://localhost:5173",
+  "https://skillswap-frontend-gilt.vercel.app",
+];
+
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Allow requests with no origin
+    // (Postman, server-to-server requests, etc.)
+    if (!origin) {
+      return callback(null, true);
+    }
+
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    return callback(new Error("Not allowed by CORS"));
+  },
+
+  methods: [
+    "GET",
+    "POST",
+    "PUT",
+    "PATCH",
+    "DELETE",
+    "OPTIONS",
+  ],
+
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+  ],
+
+  credentials: true,
+};
 
 // ─── Socket.io ──────────────────────────────────────────────────────────────
+
 const io = new Server(server, {
   cors: {
-    origin: CORS_ORIGIN,
+    origin: allowedOrigins,
     methods: ["GET", "POST"],
+    credentials: true,
   },
 });
 
 app.set("io", io);
 
 // ─── Middleware ─────────────────────────────────────────────────────────────
-app.use(cors({ origin: CORS_ORIGIN }));
+
+app.use(cors(corsOptions));
+
+app.options("*", cors(corsOptions));
+
 app.use(express.json());
 
 // ─── Routes ─────────────────────────────────────────────────────────────────
+
 app.get("/", (req, res) => {
-  res.json({ message: "SkillSwap API is running" });
+  res.json({
+    message: "SkillSwap API is running",
+  });
 });
 
 app.use("/api/auth", authRoutes);
@@ -52,16 +97,23 @@ app.use("/api/reviews", reviewRoutes);
 app.use("/api/notifications", notificationRoutes);
 
 // ─── Error Handling ─────────────────────────────────────────────────────────
+
 app.use((req, res) => {
-  res.status(404).json({ message: "Route not found" });
+  res.status(404).json({
+    message: "Route not found",
+  });
 });
 
 app.use((err, req, res, next) => {
   console.error(err.stack);
-  res.status(500).json({ message: "Something went wrong on the server" });
+
+  res.status(500).json({
+    message: "Something went wrong on the server",
+  });
 });
 
 // ─── Socket.io Authentication ──────────────────────────────────────────────
+
 io.use(async (socket, next) => {
   const token = socket.handshake.auth?.token;
 
@@ -70,7 +122,10 @@ io.use(async (socket, next) => {
   }
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(
+      token,
+      process.env.JWT_SECRET
+    );
 
     const user = await User.findById(decoded.id);
 
@@ -79,6 +134,7 @@ io.use(async (socket, next) => {
     }
 
     socket.user = user;
+
     next();
   } catch {
     next(new Error("Invalid token"));
@@ -86,6 +142,7 @@ io.use(async (socket, next) => {
 });
 
 // ─── Socket.io Connection ──────────────────────────────────────────────────
+
 io.on("connection", (socket) => {
   const userId = String(socket.user._id);
 
@@ -178,6 +235,7 @@ io.on("connection", (socket) => {
 });
 
 // ─── Server Startup ─────────────────────────────────────────────────────────
+
 const PORT = process.env.PORT || 5000;
 
 connectDB().then(() => {
